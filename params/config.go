@@ -439,9 +439,9 @@ type OptimismConfig struct {
 	EIP1559Elasticity        uint64 `json:"eip1559Elasticity"`
 	EIP1559Denominator       uint64 `json:"eip1559Denominator"`
 	EIP1559DenominatorCanyon uint64 `json:"eip1559DenominatorCanyon"`
-	// Enable using SoulGasToken for gas fee.
-	EnableSoulGasToken bool `json:"enableSoulGasToken"`
-	// Whether SoulGasToken is backed by native token or minted by whitelisted miners, only effective when EnableSoulGasToken is true
+	// Flag for whether using SoulGasToken for gas fee.
+	UseSoulGasToken bool `json:"useSoulGasToken"`
+	// Whether SoulGasToken is backed by native token or minted by whitelisted miners, only effective when UseSoulGasToken is true
 	IsSoulBackedByNative bool `json:"isSoulBackedByNative"`
 }
 
