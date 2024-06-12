@@ -410,7 +410,7 @@ func (st *StateTransition) buyGas() error {
 	}
 
 	st.gasFromSoul = false
-	if st.evm.ChainConfig().IsOptimism() && st.evm.ChainConfig().Optimism.UseSoulGasToken {
+	if st.msg.From != (common.Address{}) && st.evm.ChainConfig().IsOptimism() && st.evm.ChainConfig().Optimism.UseSoulGasToken {
 		have, err := st.GetSoulBalance(st.msg.From)
 		if err != nil {
 			return fmt.Errorf("GetSoulBalance error:%v", err)
