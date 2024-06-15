@@ -410,6 +410,8 @@ func (st *StateTransition) buyGas() error {
 	}
 
 	st.gasFromSoul = false
+
+	// SoulGasToken doesn't support burning balance of zero account, so here we ensure that `gasFromSoul` is false for zero account.
 	if st.msg.From != (common.Address{}) && st.evm.ChainConfig().IsOptimism() && st.evm.ChainConfig().Optimism.UseSoulGasToken {
 		have, err := st.GetSoulBalance(st.msg.From)
 		if err != nil {
