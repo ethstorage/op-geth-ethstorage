@@ -190,7 +190,7 @@ func newL1CostFuncBedrockHelper(l1BaseFee, overhead, scalar *big.Int, isRegolith
 // very first block of the upgrade.
 func newL1CostFuncEcotone(l1BaseFee, l1BlobBaseFee, l1BaseFeeScalar, l1BlobBaseFeeScalar *big.Int) l1CostFunc {
 	return func(costData RollupCostData) (fee, calldataGasUsed *big.Int) {
-		calldataGas := (costData.zeroes * params.TxDataZeroGas) + (costData.ones * params.TxDataNonZeroGasEIP2028) + costData.blobs*params.BlobDAProofGas
+		calldataGas := (costData.zeroes * params.TxDataZeroGas) + (costData.ones * params.TxDataNonZeroGasEIP2028)
 		calldataGasUsed = new(big.Int).SetUint64(calldataGas)
 
 		// Ecotone L1 cost function:
