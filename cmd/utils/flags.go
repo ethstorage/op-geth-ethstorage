@@ -281,6 +281,11 @@ var (
 		Usage:    "Manually specify the Optimsim Interop feature-set fork timestamp, overriding the bundled setting",
 		Category: flags.EthCategory,
 	}
+	EnableL2Blob = &cli.BoolFlag{
+		Name:     "enablel2blob",
+		Usage:    "Manually enable l2 blob for optimism",
+		Category: flags.EthCategory,
+	}
 	SyncModeFlag = &flags.TextMarshalerFlag{
 		Name:     "syncmode",
 		Usage:    `Blockchain sync mode ("snap" or "full")`,

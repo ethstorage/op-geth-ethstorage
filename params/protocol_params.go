@@ -47,6 +47,8 @@ const (
 	LogDataGas            uint64 = 8     // Per byte in a LOG* operation's data.
 	CallStipend           uint64 = 2300  // Free gas given at beginning of call.
 
+	BlobDAFee = 2000 // Fee for storing blob to DA provider
+
 	Keccak256Gas     uint64 = 30 // Once per KECCAK256 operation.
 	Keccak256WordGas uint64 = 6  // Once per word of the KECCAK256 operation's data.
 	InitCodeWordGas  uint64 = 2  // Once per word of the init code when creating a contract.

@@ -89,6 +89,7 @@ var (
 type RollupCostData struct {
 	Zeroes, Ones uint64
 	FastLzSize   uint64
+	Blobs        uint64
 }
 
 type StateGetter interface {
@@ -103,7 +104,7 @@ type L1CostFunc func(rcd RollupCostData, blockTime uint64) *big.Int
 // receipts.
 type l1CostFunc func(rcd RollupCostData) (fee, gasUsed *big.Int)
 
-func NewRollupCostData(data []byte) (out RollupCostData) {
+func NewRollupCostData(data []byte, blobs int) (out RollupCostData) {
 	for _, b := range data {
 		if b == 0 {
 			out.Zeroes++
@@ -111,7 +112,9 @@ func NewRollupCostData(data []byte) (out RollupCostData) {
 			out.Ones++
 		}
 	}
+
 	out.FastLzSize = uint64(FlzCompressLen(data))
+	out.Blobs = uint64(blobs)
 	return out
 }
 
@@ -236,6 +239,7 @@ func newL1CostFuncEcotone(l1BaseFee, l1BlobBaseFee, l1BaseFeeScalar, l1BlobBaseF
 		fee = new(big.Int).Add(calldataCostPerByte, blobCostPerByte)
 		fee = fee.Mul(fee, calldataGasUsed)
 		fee = fee.Div(fee, ecotoneDivisor)
+		fee = fee.Add(fee, new(big.Int).Mul(big.NewInt(int64(costData.Blobs)), big.NewInt(params.BlobDAFee)))
 
 		return fee, calldataGasUsed
 	}

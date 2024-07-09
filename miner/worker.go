@@ -98,6 +98,13 @@ type environment struct {
 	receipts []*types.Receipt
 	sidecars []*types.BlobTxSidecar
 	blobs    int
+	noTxs    bool // this is used as a flag whether it's *effectively* sequencing or deriving
+}
+
+// isEffectivelySequencing is true when PayloadAttributes.NoTxPool is false,
+// which only happens when it's sequencing.
+func (env *environment) isEffectivelySequencing() bool {
+	return !env.noTxs
 }
 
 // copy creates a deep copy of environment.
@@ -810,14 +817,14 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 
 func (w *worker) commitBlobTransaction(env *environment, tx *types.Transaction) ([]*types.Log, error) {
 	sc := tx.BlobTxSidecar()
-	if sc == nil {
+	if sc == nil && env.isEffectivelySequencing() /* we want to allow blob tx without blobs when it's deriving */ {
 		panic("blob transaction without blobs in miner")
 	}
 	// Checking against blob gas limit: It's kind of ugly to perform this check here, but there
 	// isn't really a better place right now. The blob gas limit is checked at block validation time
 	// and not during execution. This means core.ApplyTransaction will not return an error if the
 	// tx has too many blobs. So we have to explicitly check it here.
-	if (env.blobs+len(sc.Blobs))*params.BlobTxBlobGasPerBlob > params.MaxBlobGasPerBlock {
+	if (env.blobs+len(tx.BlobHashes()))*params.BlobTxBlobGasPerBlob > params.MaxBlobGasPerBlock {
 		return nil, errors.New("max data blobs reached")
 	}
 	receipt, err := w.applyTransaction(env, tx)
@@ -826,8 +833,10 @@ func (w *worker) commitBlobTransaction(env *environment, tx *types.Transaction) 
 	}
 	env.txs = append(env.txs, tx.WithoutBlobTxSidecar())
 	env.receipts = append(env.receipts, receipt)
-	env.sidecars = append(env.sidecars, sc)
-	env.blobs += len(sc.Blobs)
+	if sc != nil {
+		env.sidecars = append(env.sidecars, sc)
+	}
+	env.blobs += len(tx.BlobHashes())
 	*env.header.BlobGasUsed += receipt.BlobGasUsed
 	return receipt.Logs, nil
 }
@@ -1100,6 +1109,7 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 		vmenv := vm.NewEVM(context, vm.TxContext{}, env.state, w.chainConfig, vm.Config{})
 		core.ProcessBeaconBlockRoot(*header.ParentBeaconRoot, vmenv, env.state)
 	}
+	env.noTxs = genParams.noTxs // invariant: genParams.noTxs has the same boolean value as PayloadAttributes.NoTxPool
 	return env, nil
 }
 
