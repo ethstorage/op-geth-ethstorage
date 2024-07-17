@@ -90,6 +90,7 @@ var (
 		utils.BlobPoolPriceBumpFlag,
 		utils.SyncModeFlag,
 		utils.SyncTargetFlag,
+		utils.EsURLFlag,
 		utils.ExitWhenSyncedFlag,
 		utils.GCModeFlag,
 		utils.SnapshotFlag,
