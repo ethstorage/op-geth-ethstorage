@@ -398,6 +398,7 @@ type ChainConfig struct {
 
 	InteropTime *uint64 `json:"interopTime,omitempty"` // Interop switch time (nil = no fork, 0 = already on optimism interop)
 
+	L2BlobTime *uint64 `json:"l2BlobTime,omitempty"` // L2Blob switch time (nil = no fork, 0 = already on optimism l2blob)
 	// TerminalTotalDifficulty is the amount of total difficulty reached by
 	// the network that triggers the consensus upgrade.
 	TerminalTotalDifficulty *big.Int `json:"terminalTotalDifficulty,omitempty"`
@@ -439,7 +440,6 @@ type OptimismConfig struct {
 	EIP1559Elasticity        uint64 `json:"eip1559Elasticity"`
 	EIP1559Denominator       uint64 `json:"eip1559Denominator"`
 	EIP1559DenominatorCanyon uint64 `json:"eip1559DenominatorCanyon"`
-	EnableL2Blob             bool   `json:"enable_l2_blob"`
 	// Flag for whether using SoulGasToken for gas fee.
 	UseSoulGasToken bool `json:"useSoulGasToken"`
 	// Whether SoulGasToken is backed by native token or minted by whitelisted miners, only effective when UseSoulGasToken is true
@@ -648,6 +648,11 @@ func (c *ChainConfig) IsShanghai(num *big.Int, time uint64) bool {
 // IsCancun returns whether num is either equal to the Cancun fork time or greater.
 func (c *ChainConfig) IsCancun(num *big.Int, time uint64) bool {
 	return c.IsLondon(num) && isTimestampForked(c.CancunTime, time)
+}
+
+// IsL2Blob returns whether l2 blob is enabled
+func (c *ChainConfig) IsL2Blob(num *big.Int, time uint64) bool {
+	return c.IsCancun(num, time) && c.Optimism != nil && isTimestampForked(c.L2BlobTime, time)
 }
 
 // IsPrague returns whether num is either equal to the Prague fork time or greater.

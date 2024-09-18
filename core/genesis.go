@@ -226,7 +226,6 @@ type ChainOverrides struct {
 	OverrideOptimismEcotone *uint64
 	OverrideOptimismFjord   *uint64
 	ApplySuperchainUpgrades bool
-	EnableL2Blob            bool
 	OverrideOptimismInterop *uint64
 }
 
@@ -266,9 +265,6 @@ func SetupGenesisBlockWithOverride(db ethdb.Database, triedb *triedb.Database, g
 				}
 			}
 
-			if config.IsOptimism() && overrides != nil {
-				config.Optimism.EnableL2Blob = overrides.EnableL2Blob
-			}
 			if config.IsOptimism() && config.ChainID != nil && config.ChainID.Cmp(big.NewInt(params.OPGoerliChainID)) == 0 {
 				// Apply Optimism Goerli regolith time
 				config.RegolithTime = &params.OptimismGoerliRegolithTime

@@ -80,7 +80,7 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 	if tx.Type() == types.DepositTxType {
 		return core.ErrTxTypeNotSupported
 	}
-	if opts.Config.IsOptimism() && !opts.Config.Optimism.EnableL2Blob && tx.Type() == types.BlobTxType {
+	if tx.Type() == types.BlobTxType && opts.Config.IsOptimism() && !opts.Config.IsL2Blob(head.Number, head.Time) {
 		return core.ErrTxTypeNotSupported
 	}
 	// Ensure transactions not implemented by the calling pool are rejected
