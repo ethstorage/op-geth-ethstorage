@@ -259,7 +259,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	legacyPool := legacypool.New(config.TxPool, eth.blockchain)
 
 	txPools := []txpool.SubPool{legacyPool}
-	if !eth.BlockChain().Config().IsOptimism() || eth.BlockChain().Config().Optimism.L2BlobTime != nil {
+	if !eth.BlockChain().Config().IsOptimism() || eth.BlockChain().Config().L2BlobTime != nil {
 		blobPool := blobpool.New(config.BlobPool, eth.blockchain)
 		txPools = append(txPools, blobPool)
 	}

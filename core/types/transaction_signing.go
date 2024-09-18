@@ -65,7 +65,7 @@ func MakeSigner(config *params.ChainConfig, blockNumber *big.Int, blockTime uint
 // have the current block number available, use MakeSigner instead.
 func LatestSigner(config *params.ChainConfig) Signer {
 	if config.ChainID != nil {
-		if config.CancunTime != nil && (!config.IsOptimism() || config.Optimism.L2BlobTime != nil) {
+		if config.CancunTime != nil && (!config.IsOptimism() || config.L2BlobTime != nil) {
 			return NewCancunSigner(config.ChainID)
 		}
 		if config.LondonBlock != nil {
