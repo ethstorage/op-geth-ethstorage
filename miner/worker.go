@@ -258,6 +258,7 @@ func (miner *Miner) prepareWork(genParams *generateParams) (*environment, error)
 		vmenv := vm.NewEVM(context, vm.TxContext{}, env.state, miner.chainConfig, vm.Config{})
 		core.ProcessBeaconBlockRoot(*header.ParentBeaconRoot, vmenv, env.state)
 	}
+	env.noTxs = genParams.noTxs // invariant: genParams.noTxs has the same boolean value as PayloadAttributes.NoTxPool
 	return env, nil
 }
 
