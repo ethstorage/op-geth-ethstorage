@@ -279,8 +279,8 @@ func (st *StateTransition) SubSoulBalance(account common.Address, amount *big.In
 	if current.Cmp(amount) < 0 {
 		return fmt.Errorf("soul balance not enough, current:%v, expect:%v", current, amount)
 	}
-	var value common.Hash
-	current.Sub(current, amount).FillBytes(value[:])
+
+	value := uint256.MustFromBig(current.Sub(current, amount)).Bytes32()
 	st.state.SetState(types.SoulGasTokenAddr, targetSlot(account), value)
 
 	if st.evm.ChainConfig().IsOptimism() && st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
@@ -291,8 +291,7 @@ func (st *StateTransition) SubSoulBalance(account common.Address, amount *big.In
 
 func (st *StateTransition) AddSoulBalance(account common.Address, amount *big.Int) {
 	current := st.GetSoulBalance(account).ToBig()
-	var value common.Hash
-	current.Add(current, amount).FillBytes(value[:])
+	value := uint256.MustFromBig(current.Add(current, amount)).Bytes32()
 	st.state.SetState(types.SoulGasTokenAddr, targetSlot(account), value)
 
 	if st.evm.ChainConfig().IsOptimism() && st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
