@@ -1219,7 +1219,7 @@ type DecodeType uint64
 const (
 	esGetBlobInputLength  = 160
 	maxDataWordLenPerBlob = 4096 // blob size in proto-danksharding
-	defaultCallTimeout    = 1 * time.Second
+	defaultCallTimeout    = 10 * time.Second
 
 	RawData DecodeType = iota
 	PaddingPer31Bytes
