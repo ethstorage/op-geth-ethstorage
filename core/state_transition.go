@@ -247,7 +247,7 @@ func (st *StateTransition) to() common.Address {
 
 const (
 	// should keep it in sync with the balances field of SoulGasToken contract
-	balancesSlot = uint64(51)
+	BalancesSlot = uint64(51)
 )
 
 var (
@@ -261,7 +261,7 @@ func init() {
 }
 
 func targetSlot(account common.Address) (slot common.Hash) {
-	data, _ := slotArgs.Pack(account, balancesSlot)
+	data, _ := slotArgs.Pack(account, BalancesSlot)
 	slot = crypto.Keccak256Hash(data)
 	return
 }
