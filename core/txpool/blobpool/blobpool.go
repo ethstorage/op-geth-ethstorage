@@ -1092,7 +1092,8 @@ func (p *BlobPool) validateTx(tx *types.Transaction) error {
 	}
 	// Ensure the transaction adheres to the stateful pool filters (nonce, balance)
 	stateOpts := &txpool.ValidationOptionsWithState{
-		State: p.state,
+		State:       p.state,
+		Chainconfig: p.chain.Config(),
 
 		FirstNonceGap: func(addr common.Address) uint64 {
 			// Nonce gaps are not permitted in the blob pool, the first gap will
