@@ -260,14 +260,14 @@ func init() {
 	slotArgs = abi.Arguments{{Name: "addr", Type: addressTy, Indexed: false}, {Name: "slot", Type: uint64Ty, Indexed: false}}
 }
 
-func targetSlot(account common.Address) (slot common.Hash) {
+func TargetSGTBalanceSlot(account common.Address) (slot common.Hash) {
 	data, _ := slotArgs.Pack(account, BalancesSlot)
 	slot = crypto.Keccak256Hash(data)
 	return
 }
 
 func (st *StateTransition) GetSoulBalance(account common.Address) *uint256.Int {
-	slot := targetSlot(account)
+	slot := TargetSGTBalanceSlot(account)
 	value := st.state.GetState(types.SoulGasTokenAddr, slot)
 	balance := new(uint256.Int)
 	balance.SetBytes(value[:])
@@ -281,7 +281,7 @@ func (st *StateTransition) SubSoulBalance(account common.Address, amount *big.In
 	}
 
 	value := uint256.MustFromBig(current.Sub(current, amount)).Bytes32()
-	st.state.SetState(types.SoulGasTokenAddr, targetSlot(account), value)
+	st.state.SetState(types.SoulGasTokenAddr, TargetSGTBalanceSlot(account), value)
 
 	if st.evm.ChainConfig().IsOptimism() && st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
 		st.state.SubBalance(types.SoulGasTokenAddr, uint256.MustFromBig(amount))
@@ -292,7 +292,7 @@ func (st *StateTransition) SubSoulBalance(account common.Address, amount *big.In
 func (st *StateTransition) AddSoulBalance(account common.Address, amount *big.Int) {
 	current := st.GetSoulBalance(account).ToBig()
 	value := uint256.MustFromBig(current.Add(current, amount)).Bytes32()
-	st.state.SetState(types.SoulGasTokenAddr, targetSlot(account), value)
+	st.state.SetState(types.SoulGasTokenAddr, TargetSGTBalanceSlot(account), value)
 
 	if st.evm.ChainConfig().IsOptimism() && st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
 		st.state.AddBalance(types.SoulGasTokenAddr, uint256.MustFromBig(amount))
