@@ -22,12 +22,12 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
-	"github.com/ethereum/go-ethereum/accounts/abi/util"
 	"github.com/ethereum/go-ethereum/common"
 	cmath "github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
@@ -246,127 +246,54 @@ func (st *StateTransition) to() common.Address {
 	return *st.msg.To
 }
 
-var SoulGasTokenABI abi.ABI
-
-func init() {
-	var err error
-	SoulGasTokenABI, err = util.ParseFunctionsAsABI([]string{
-		"function deposit()", // used by op_geth_test.go
-		"function balanceOf(address account) returns (uint256 balance)",
-		"function burnFrom(address account, uint256 value)",
-		"function batchMint(address[] accounts, uint256[] values)"})
-	if err != nil {
-		panic(err)
-	}
-}
-
-func getSoulBalanceData(account common.Address) []byte {
-	method, ok := SoulGasTokenABI.Methods["balanceOf"]
-	if !ok {
-		panic("balanceOf method not found")
-	}
-
-	argument, err := method.Inputs.Pack(account)
-	if err != nil {
-		panic("failed to pack argument")
-	}
-
-	data := make([]byte, len(method.ID)+len(argument))
-	copy(data[0:len(method.ID)], method.ID)
-	copy(data[len(method.ID):], argument)
-	return data
-}
-
-func parseSoulBalanceResp(ret []byte) (*uint256.Int, error) {
-	method, ok := SoulGasTokenABI.Methods["balanceOf"]
-	if !ok {
-		panic("balanceOf method not found")
-	}
-
-	returnValueInterface, err := method.Outputs.Unpack(ret)
-	if err != nil {
-		return nil, fmt.Errorf("parseSoulBalanceResp Unpack failed:%w", err)
-	}
-
-	returnValue := new(big.Int)
-	err = method.Outputs.Copy(&returnValue, returnValueInterface)
-	if err != nil {
-		return nil, fmt.Errorf("parseSoulBalanceResp Copy failed:%w", err)
-	}
-	returnValueU256, overflow := uint256.FromBig(returnValue)
-	if overflow {
-		return nil, fmt.Errorf("parsed soul balance overflow:%v", returnValue)
-	}
-	return returnValueU256, nil
-}
-
-func burnSoulBalanceData(account common.Address, amount *big.Int) []byte {
-
-	method, ok := SoulGasTokenABI.Methods["burnFrom"]
-	if !ok {
-		panic("burnFrom method not found")
-	}
-
-	argument, err := method.Inputs.Pack(account, amount)
-	if err != nil {
-		panic("failed to pack argument")
-	}
-
-	data := make([]byte, len(method.ID)+len(argument))
-	copy(data[0:len(method.ID)], method.ID)
-	copy(data[len(method.ID):], argument)
-	return data
-}
-
-func mintSoulBalanceData(account common.Address, amount *big.Int) []byte {
-	method, ok := SoulGasTokenABI.Methods["batchMint"]
-	if !ok {
-		panic("batchMint method not found")
-	}
-
-	argument, err := method.Inputs.Pack([]common.Address{account}, []*big.Int{amount})
-	if err != nil {
-		panic("failed to pack argument")
-	}
-
-	data := make([]byte, len(method.ID)+len(argument))
-	copy(data[0:len(method.ID)], method.ID)
-	copy(data[len(method.ID):], argument)
-	return data
-}
-
-var (
-	callSoulGasLimit = uint64(8_000_000)
-	// use hardcoded DEPOSITOR_ACCOUNT both as minter and burner
-	depositorAddress = common.HexToAddress("0xDeaDDEaDDeAdDeAdDEAdDEaddeAddEAdDEAd0001")
+const (
+	// should keep it in sync with the balances field of SoulGasToken contract
+	BalancesSlot = uint64(51)
 )
 
-func (st *StateTransition) GetSoulBalance(account common.Address) (*uint256.Int, error) {
-	// this evm call is free of gas charging
-	ret, _, vmerr := st.evm.StaticCall(vm.AccountRef(account), types.SoulGasTokenAddr, getSoulBalanceData(account), callSoulGasLimit)
-	if vmerr != nil {
-		return nil, vmerr
-	}
-	return parseSoulBalanceResp(ret)
+var (
+	slotArgs abi.Arguments
+)
+
+func init() {
+	uint64Ty, _ := abi.NewType("uint64", "", nil)
+	addressTy, _ := abi.NewType("address", "", nil)
+	slotArgs = abi.Arguments{{Name: "addr", Type: addressTy, Indexed: false}, {Name: "slot", Type: uint64Ty, Indexed: false}}
+}
+
+func TargetSGTBalanceSlot(account common.Address) (slot common.Hash) {
+	data, _ := slotArgs.Pack(account, BalancesSlot)
+	slot = crypto.Keccak256Hash(data)
+	return
+}
+
+func (st *StateTransition) GetSoulBalance(account common.Address) *uint256.Int {
+	slot := TargetSGTBalanceSlot(account)
+	value := st.state.GetState(types.SoulGasTokenAddr, slot)
+	balance := new(uint256.Int)
+	balance.SetBytes(value[:])
+	return balance
 }
 
 func (st *StateTransition) SubSoulBalance(account common.Address, amount *big.Int, reason tracing.BalanceChangeReason) (err error) {
-	_, _, err = st.evm.Call(vm.AccountRef(depositorAddress), types.SoulGasTokenAddr, burnSoulBalanceData(account, amount), callSoulGasLimit, common.U2560)
-	if err == nil {
-		if st.evm.ChainConfig().IsOptimism() && st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
-			st.state.SubBalance(types.SoulGasTokenAddr, uint256.MustFromBig(amount), reason)
-		}
+	current := st.GetSoulBalance(account).ToBig()
+	if current.Cmp(amount) < 0 {
+		return fmt.Errorf("soul balance not enough, current:%v, expect:%v", current, amount)
+	}
+
+	value := uint256.MustFromBig(current.Sub(current, amount)).Bytes32()
+	st.state.SetState(types.SoulGasTokenAddr, TargetSGTBalanceSlot(account), value)
+
+	if st.evm.ChainConfig().IsOptimism() && st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
+		st.state.SubBalance(types.SoulGasTokenAddr, uint256.MustFromBig(amount), reason)
 	}
 	return
 }
 
 func (st *StateTransition) AddSoulBalance(account common.Address, amount *big.Int, reason tracing.BalanceChangeReason) {
-
-	_, _, err := st.evm.Call(vm.AccountRef(depositorAddress), types.SoulGasTokenAddr, mintSoulBalanceData(account, amount), callSoulGasLimit, common.U2560)
-
-	if err != nil {
-		panic(fmt.Sprintf("mint should never fail:%v", err))
-	}
+	current := st.GetSoulBalance(account).ToBig()
+	value := uint256.MustFromBig(current.Add(current, amount)).Bytes32()
+	st.state.SetState(types.SoulGasTokenAddr, TargetSGTBalanceSlot(account), value)
 
 	if st.evm.ChainConfig().IsOptimism() && st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
 		st.state.AddBalance(types.SoulGasTokenAddr, uint256.MustFromBig(amount), reason)
@@ -413,12 +340,8 @@ func (st *StateTransition) buyGas() error {
 
 	st.gasFromSoul = false
 
-	// SoulGasToken doesn't support burning balance of zero account, so here we ensure that `gasFromSoul` is false for zero account.
-	if st.msg.From != (common.Address{}) && st.evm.ChainConfig().IsOptimism() && st.evm.ChainConfig().Optimism.UseSoulGasToken {
-		have, err := st.GetSoulBalance(st.msg.From)
-		if err != nil {
-			return fmt.Errorf("GetSoulBalance error:%v", err)
-		}
+	if st.evm.ChainConfig().IsOptimism() && st.evm.ChainConfig().Optimism.UseSoulGasToken {
+		have := st.GetSoulBalance(st.msg.From)
 		if have, want := have.ToBig(), new(big.Int).Sub(balanceCheck, st.msg.Value); have.Cmp(want) >= 0 {
 			if have, want := st.state.GetBalance(st.msg.From).ToBig(), st.msg.Value; have.Cmp(want) < 0 {
 				return fmt.Errorf("%w: address %v have %v want %v", ErrInsufficientFunds, st.msg.From.Hex(), have, want)
