@@ -55,8 +55,10 @@ type Config struct {
 	GasPrice            *big.Int       // Minimum gas price for mining a transaction
 	Recommit            time.Duration  // The time interval for miner to re-create mining work.
 
-	RollupComputePendingBlock bool   // Compute the pending block from tx-pool, instead of copying the latest-block
-	EffectiveGasCeil          uint64 // if non-zero, a gas ceiling to apply independent of the header's gaslimit value
+	RollupComputePendingBlock             bool // Compute the pending block from tx-pool, instead of copying the latest-block
+	RollupTransactionConditionalRateLimit int  // Total number of conditional cost units allowed in a second
+
+	EffectiveGasCeil uint64 // if non-zero, a gas ceiling to apply independent of the header's gaslimit value
 }
 
 // DefaultConfig contains default settings for miner.
@@ -151,8 +153,8 @@ func (miner *Miner) SetGasTip(tip *big.Int) error {
 }
 
 // BuildPayload builds the payload according to the provided parameters.
-func (miner *Miner) BuildPayload(args *BuildPayloadArgs) (*Payload, error) {
-	return miner.buildPayload(args)
+func (miner *Miner) BuildPayload(args *BuildPayloadArgs, witness bool) (*Payload, error) {
+	return miner.buildPayload(args, witness)
 }
 
 // getPending retrieves the pending block based on the current head block.
@@ -181,7 +183,7 @@ func (miner *Miner) getPending() *newPayloadResult {
 		withdrawals: withdrawal,
 		beaconRoot:  nil,
 		noTxs:       false,
-	})
+	}, false) // we will never make a witness for a pending block
 	if ret.err != nil {
 		return nil
 	}
