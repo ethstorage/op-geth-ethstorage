@@ -279,6 +279,33 @@ func (st *StateTransition) GetSoulBalance(account common.Address) *uint256.Int {
 	return balance
 }
 
+func GetEffectiveGasBalance(state vm.StateDB, chainconfig *params.ChainConfig, account common.Address) *uint256.Int {
+	bal, sgtBal := GetGasBalances(state, chainconfig, account)
+	if bal.Cmp(sgtBal) < 0 {
+		return sgtBal
+	}
+
+	return bal
+}
+
+func GetGasBalances(state vm.StateDB, chainconfig *params.ChainConfig, account common.Address) (*uint256.Int, *uint256.Int) {
+	balance := state.GetBalance(account)
+	if chainconfig != nil && chainconfig.IsOptimism() && chainconfig.Optimism.UseSoulGasToken {
+		sgtBalanceSlot := TargetSGTBalanceSlot(account)
+		sgtBalanceValue := state.GetState(types.SoulGasTokenAddr, sgtBalanceSlot)
+		sgtBalance := new(uint256.Int).SetBytes(sgtBalanceValue[:])
+
+		return balance, sgtBalance
+	}
+
+	return balance, uint256.NewInt(0)
+}
+
+func GetGasBalancesInBig(state vm.StateDB, chainconfig *params.ChainConfig, account common.Address) (*big.Int, *big.Int) {
+	bal, sgtBal := GetGasBalances(state, chainconfig, account)
+	return bal.ToBig(), sgtBal.ToBig()
+}
+
 func (st *StateTransition) SubSoulBalance(account common.Address, amount *big.Int, reason tracing.BalanceChangeReason) (err error) {
 	current := st.GetSoulBalance(account).ToBig()
 	if current.Cmp(amount) < 0 {

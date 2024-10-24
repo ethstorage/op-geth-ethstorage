@@ -668,7 +668,7 @@ func (p *BlobPool) recheck(addr common.Address, inclusions map[common.Hash]uint6
 	// Ensure that there's no over-draft, this is expected to happen when some
 	// transactions get included without publishing on the network
 	var (
-		balance = p.state.GetBalance(addr)
+		balance = core.GetEffectiveGasBalance(p.state, p.chain.Config(), addr)
 		spent   = p.spent[addr]
 	)
 	if spent.Cmp(balance) > 0 {

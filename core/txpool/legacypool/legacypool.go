@@ -1520,7 +1520,7 @@ func (pool *LegacyPool) promoteExecutables(accounts []common.Address) []*types.T
 			pool.all.Remove(hash)
 		}
 		log.Trace("Removed old queued transactions", "count", len(forwards))
-		balance := pool.currentState.GetBalance(addr)
+		balance := core.GetEffectiveGasBalance(pool.currentState, pool.chainconfig, addr)
 		balance = pool.reduceBalanceByL1Cost(list, balance)
 		// Drop all transactions that are too costly (low balance or out of gas)
 		drops, _ := list.Filter(balance, gasLimit)
@@ -1723,7 +1723,7 @@ func (pool *LegacyPool) demoteUnexecutables() {
 			pool.all.Remove(hash)
 			log.Trace("Removed old pending transaction", "hash", hash)
 		}
-		balance := pool.currentState.GetBalance(addr)
+		balance := core.GetEffectiveGasBalance(pool.currentState, pool.chainconfig, addr)
 		balance = pool.reduceBalanceByL1Cost(list, balance)
 		// Drop all transactions that are too costly (low balance or out of gas), and queue any invalids back for later
 		drops, invalids := list.Filter(balance, gasLimit)

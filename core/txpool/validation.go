@@ -29,7 +29,6 @@ import (
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/holiman/uint256"
 )
 
 // L1 Info Gas Overhead is the amount of gas the the L1 info deposit consumes.
@@ -254,16 +253,9 @@ func ValidateTransactionWithState(tx *types.Transaction, signer types.Signer, op
 	}
 	// Ensure the transactor has enough funds to cover the transaction costs
 	var (
-		balance = opts.State.GetBalance(from).ToBig()
-		cost    = tx.Cost()
+		balance, sgtBalance = core.GetGasBalancesInBig(opts.State, opts.Chainconfig, from)
+		cost                = tx.Cost()
 	)
-
-	sgtBalance := new(big.Int)
-	if opts.Chainconfig != nil && opts.Chainconfig.IsOptimism() && opts.Chainconfig.Optimism.UseSoulGasToken {
-		sgtBalanceSlot := core.TargetSGTBalanceSlot(from)
-		sgtBalanceValue := opts.State.GetState(types.SoulGasTokenAddr, sgtBalanceSlot)
-		sgtBalance = new(uint256.Int).SetBytes(sgtBalanceValue[:]).ToBig()
-	}
 
 	if opts.L1CostFn != nil {
 		if l1Cost := opts.L1CostFn(tx.RollupCostData()); l1Cost != nil { // add rollup cost
