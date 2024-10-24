@@ -30,11 +30,13 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
 )
@@ -46,10 +48,15 @@ const (
 )
 
 var (
+	errTxConditionalInvalid = errors.New("transaction conditional failed")
+
 	errBlockInterruptedByNewHead  = errors.New("new head arrived while building block")
 	errBlockInterruptedByRecommit = errors.New("recommit interrupt while building block")
 	errBlockInterruptedByTimeout  = errors.New("timeout while building block")
 	errBlockInterruptedByResolve  = errors.New("payload resolution while building block")
+
+	txConditionalRejectedCounter = metrics.NewRegisteredCounter("miner/transactionConditional/rejected", nil)
+	txConditionalMinedTimer      = metrics.NewRegisteredTimer("miner/transactionConditional/elapsedtime", nil)
 )
 
 // environment is the worker's current environment and holds all
@@ -66,7 +73,9 @@ type environment struct {
 	receipts []*types.Receipt
 	sidecars []*types.BlobTxSidecar
 	blobs    int
-	noTxs    bool // this is used as a flag whether it's *effectively* sequencing or deriving
+	witness  *stateless.Witness
+
+	noTxs bool // this is used as a flag whether it's *effectively* sequencing or deriving
 }
 
 // isEffectivelySequencing is true when PayloadAttributes.NoTxPool is false,
@@ -91,6 +100,7 @@ type newPayloadResult struct {
 	sidecars []*types.BlobTxSidecar // collected blobs of blob transactions
 	stateDB  *state.StateDB         // StateDB after executing the transactions
 	receipts []*types.Receipt       // Receipts collected during construction
+	witness  *stateless.Witness     // Witness is an optional stateless proof
 }
 
 // generateParams wraps various settings for generating sealing task.
@@ -104,22 +114,30 @@ type generateParams struct {
 	beaconRoot  *common.Hash      // The beacon root (cancun field).
 	noTxs       bool              // Flag whether an empty block without any transaction is expected
 
-	txs       types.Transactions // Deposit transactions to include at the start of the block
-	gasLimit  *uint64            // Optional gas limit override
-	interrupt *atomic.Int32      // Optional interruption signal to pass down to worker.generateWork
-	isUpdate  bool               // Optional flag indicating that this is building a discardable update
+	txs           types.Transactions // Deposit transactions to include at the start of the block
+	gasLimit      *uint64            // Optional gas limit override
+	eip1559Params []byte             // Optional EIP-1559 parameters
+	interrupt     *atomic.Int32      // Optional interruption signal to pass down to worker.generateWork
+	isUpdate      bool               // Optional flag indicating that this is building a discardable update
 }
 
 // generateWork generates a sealing block based on the given parameters.
-func (miner *Miner) generateWork(params *generateParams) *newPayloadResult {
-	work, err := miner.prepareWork(params)
+func (miner *Miner) generateWork(params *generateParams, witness bool) *newPayloadResult {
+	work, err := miner.prepareWork(params, witness)
 	if err != nil {
 		return &newPayloadResult{err: err}
 	}
 	if work.gasPool == nil {
-		gasLimit := miner.config.EffectiveGasCeil
-		if gasLimit == 0 || gasLimit > work.header.GasLimit {
-			gasLimit = work.header.GasLimit
+		gasLimit := work.header.GasLimit
+
+		// If we're building blocks with mempool transactions, we need to ensure that the
+		// gas limit is not higher than the effective gas limit. We must still accept any
+		// explicitly selected transactions with gas usage up to the block header's limit.
+		if !params.noTxs {
+			effectiveGasLimit := miner.config.EffectiveGasCeil
+			if effectiveGasLimit != 0 && effectiveGasLimit < gasLimit {
+				gasLimit = effectiveGasLimit
+			}
 		}
 		work.gasPool = new(core.GasPool).AddGas(gasLimit)
 	}
@@ -158,6 +176,18 @@ func (miner *Miner) generateWork(params *generateParams) *newPayloadResult {
 	}
 
 	body := types.Body{Transactions: work.txs, Withdrawals: params.withdrawals}
+	allLogs := make([]*types.Log, 0)
+	for _, r := range work.receipts {
+		allLogs = append(allLogs, r.Logs...)
+	}
+	// Read requests if Prague is enabled.
+	if miner.chainConfig.IsPrague(work.header.Number, work.header.Time) {
+		requests, err := core.ParseDepositLogs(allLogs, miner.chainConfig)
+		if err != nil {
+			return &newPayloadResult{err: err}
+		}
+		body.Requests = requests
+	}
 	block, err := miner.engine.FinalizeAndAssemble(miner.chain, work.header, work.state, &body, work.receipts)
 	if err != nil {
 		return &newPayloadResult{err: err}
@@ -168,13 +198,14 @@ func (miner *Miner) generateWork(params *generateParams) *newPayloadResult {
 		sidecars: work.sidecars,
 		stateDB:  work.state,
 		receipts: work.receipts,
+		witness:  work.witness,
 	}
 }
 
 // prepareWork constructs the sealing task according to the given parameters,
 // either based on the last chain head or specified parent. In this function
 // the pending transactions are not filled yet, only the empty task returned.
-func (miner *Miner) prepareWork(genParams *generateParams) (*environment, error) {
+func (miner *Miner) prepareWork(genParams *generateParams, witness bool) (*environment, error) {
 	miner.confMu.RLock()
 	defer miner.confMu.RUnlock()
 
@@ -205,7 +236,8 @@ func (miner *Miner) prepareWork(genParams *generateParams) (*environment, error)
 		Coinbase:   genParams.coinbase,
 	}
 	// Set the extra field.
-	if len(miner.config.ExtraData) != 0 && miner.chainConfig.Optimism == nil { // Optimism chains must not set any extra data.
+	if len(miner.config.ExtraData) != 0 && miner.chainConfig.Optimism == nil {
+		// Optimism chains have their own ExtraData handling rules
 		header.Extra = miner.config.ExtraData
 	}
 	// Set the randomness field from the beacon chain if it's available.
@@ -225,6 +257,21 @@ func (miner *Miner) prepareWork(genParams *generateParams) (*environment, error)
 	} else if miner.chain.Config().Optimism != nil && miner.config.GasCeil != 0 {
 		// configure the gas limit of pending blocks with the miner gas limit config when using optimism
 		header.GasLimit = miner.config.GasCeil
+	}
+	if miner.chainConfig.IsHolocene(header.Time) {
+		if err := eip1559.ValidateHolocene1559Params(genParams.eip1559Params); err != nil {
+			return nil, err
+		}
+		// If this is a holocene block and the params are 0, we must convert them to their previous
+		// constants in the header.
+		d, e := eip1559.DecodeHolocene1559Params(genParams.eip1559Params)
+		if d == 0 {
+			d = miner.chainConfig.BaseFeeChangeDenominator(header.Time)
+			e = miner.chainConfig.ElasticityMultiplier()
+		}
+		header.Extra = eip1559.EncodeHoloceneExtraData(d, e)
+	} else if genParams.eip1559Params != nil {
+		return nil, errors.New("got eip1559 params, expected none")
 	}
 	// Run the consensus preparation with the default or customized consensus engine.
 	// Note that the `header.Time` may be changed.
@@ -248,7 +295,7 @@ func (miner *Miner) prepareWork(genParams *generateParams) (*environment, error)
 	// Could potentially happen if starting to mine in an odd state.
 	// Note genParams.coinbase can be different with header.Coinbase
 	// since clique algorithm can modify the coinbase field in header.
-	env, err := miner.makeEnv(parent, header, genParams.coinbase)
+	env, err := miner.makeEnv(parent, header, genParams.coinbase, witness)
 	if err != nil {
 		log.Error("Failed to create sealing context", "err", err)
 		return nil, err
@@ -258,12 +305,17 @@ func (miner *Miner) prepareWork(genParams *generateParams) (*environment, error)
 		vmenv := vm.NewEVM(context, vm.TxContext{}, env.state, miner.chainConfig, vm.Config{})
 		core.ProcessBeaconBlockRoot(*header.ParentBeaconRoot, vmenv, env.state)
 	}
+	if miner.chainConfig.IsPrague(header.Number, header.Time) {
+		context := core.NewEVMBlockContext(header, miner.chain, nil, miner.chainConfig, env.state)
+		vmenv := vm.NewEVM(context, vm.TxContext{}, env.state, miner.chainConfig, vm.Config{})
+		core.ProcessParentBlockHash(header.ParentHash, vmenv, env.state)
+	}
 	env.noTxs = genParams.noTxs // invariant: genParams.noTxs has the same boolean value as PayloadAttributes.NoTxPool
 	return env, nil
 }
 
 // makeEnv creates a new environment for the sealing block.
-func (miner *Miner) makeEnv(parent *types.Header, header *types.Header, coinbase common.Address) (*environment, error) {
+func (miner *Miner) makeEnv(parent *types.Header, header *types.Header, coinbase common.Address, witness bool) (*environment, error) {
 	// Retrieve the parent state to execute on top.
 	state, err := miner.chain.StateAt(parent.Root)
 	if err != nil {
@@ -282,12 +334,20 @@ func (miner *Miner) makeEnv(parent *types.Header, header *types.Header, coinbase
 		}
 	}
 
+	if witness {
+		bundle, err := stateless.NewWitness(header, miner.chain)
+		if err != nil {
+			return nil, err
+		}
+		state.StartPrefetcher("miner", bundle)
+	}
 	// Note the passed coinbase may be different with header.Coinbase.
 	return &environment{
 		signer:   types.MakeSigner(miner.chainConfig, header.Number, header.Time),
 		state:    state,
 		coinbase: coinbase,
 		header:   header,
+		witness:  state.Witness(),
 	}, nil
 }
 
@@ -295,6 +355,20 @@ func (miner *Miner) commitTransaction(env *environment, tx *types.Transaction) e
 	if tx.Type() == types.BlobTxType {
 		return miner.commitBlobTransaction(env, tx)
 	}
+
+	// If a conditional is set, check prior to applying
+	if conditional := tx.Conditional(); conditional != nil {
+		txConditionalMinedTimer.UpdateSince(tx.Time())
+
+		// check the conditional
+		if err := env.header.CheckTransactionConditional(conditional); err != nil {
+			return fmt.Errorf("failed header check: %s: %w", err, errTxConditionalInvalid)
+		}
+		if err := env.state.CheckTransactionConditional(conditional); err != nil {
+			return fmt.Errorf("failed state check: %s: %w", err, errTxConditionalInvalid)
+		}
+	}
+
 	receipt, err := miner.applyTransaction(env, tx)
 	if err != nil {
 		return err
@@ -431,6 +505,15 @@ func (miner *Miner) commitTransactions(env *environment, plainTxs, blobTxs *tran
 			// New head notification data race between the transaction pool and miner, shift
 			log.Trace("Skipping transaction with low nonce", "hash", ltx.Hash, "sender", from, "nonce", tx.Nonce())
 			txs.Shift()
+
+		case errors.Is(err, errTxConditionalInvalid):
+			// err contains contextual info on the failed conditional.
+			txConditionalRejectedCounter.Inc(1)
+
+			// mark as rejected so that it can be ejected from the mempool
+			tx.SetRejected()
+			log.Warn("Skipping account, transaction with failed conditional", "sender", from, "hash", ltx.Hash, "err", err)
+			txs.Pop()
 
 		case errors.Is(err, nil):
 			// Everything ok, collect the logs and shift in the next transaction from the same account
