@@ -668,8 +668,9 @@ func (p *BlobPool) recheck(addr common.Address, inclusions map[common.Hash]uint6
 	// Ensure that there's no over-draft, this is expected to happen when some
 	// transactions get included without publishing on the network
 	var (
-		balance = core.GetEffectiveGasBalance(p.state, p.chain.Config(), addr)
-		spent   = p.spent[addr]
+		balanceInBig, _ = core.GetEffectiveGasBalance(p.state, p.chain.Config(), addr, nil)
+		balance = uint256.MustFromBig(balanceInBig)
+		spent      = p.spent[addr]
 	)
 	if spent.Cmp(balance) > 0 {
 		// Evict the highest nonce transactions until the pending set falls under

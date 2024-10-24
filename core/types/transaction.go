@@ -382,6 +382,15 @@ func (tx *Transaction) Cost() *big.Int {
 	return total
 }
 
+// Cost returns (gas * gasPrice) + (blobGas * blobGasPrice).
+func (tx *Transaction) GasCost() *big.Int {
+	total := new(big.Int).Mul(tx.GasPrice(), new(big.Int).SetUint64(tx.Gas()))
+	if tx.Type() == BlobTxType {
+		total.Add(total, new(big.Int).Mul(tx.BlobGasFeeCap(), new(big.Int).SetUint64(tx.BlobGas())))
+	}
+	return total
+}
+
 // RollupCostData caches the information needed to efficiently compute the data availability fee
 func (tx *Transaction) RollupCostData() RollupCostData {
 	if tx.Type() == DepositTxType {

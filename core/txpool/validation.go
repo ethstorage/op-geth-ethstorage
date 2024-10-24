@@ -252,18 +252,19 @@ func ValidateTransactionWithState(tx *types.Transaction, signer types.Signer, op
 		}
 	}
 	// Ensure the transactor has enough funds to cover the transaction costs
-	var (
-		balance, sgtBalance = core.GetGasBalancesInBig(opts.State, opts.Chainconfig, from)
-		cost                = tx.Cost()
-	)
+	balance, err := core.GetEffectiveGasBalance(opts.State, opts.Chainconfig, from, tx.Value())
+	if err != nil {
+		return fmt.Errorf("%w: balance %v, tx value %v", err, balance, tx.Value())
+	}
+	cost := tx.GasCost()
 
 	if opts.L1CostFn != nil {
 		if l1Cost := opts.L1CostFn(tx.RollupCostData()); l1Cost != nil { // add rollup cost
 			cost = cost.Add(cost, l1Cost)
 		}
 	}
-	if balance.Cmp(cost) < 0 && sgtBalance.Cmp(cost) < 0 {
-		return fmt.Errorf("%w: balance %v, sgt balance:%v, tx cost %v, overshot %v", core.ErrInsufficientFunds, balance, sgtBalance, cost, new(big.Int).Sub(cost, balance))
+	if balance.Cmp(cost) < 0 {
+		return fmt.Errorf("%w: balance %v, tx cost %v, overshot %v", core.ErrInsufficientFunds, balance, cost, new(big.Int).Sub(cost, balance))
 	}
 	// Ensure the transactor has enough funds to cover for replacements or nonce
 	// expansions without overdrafts
@@ -271,13 +272,13 @@ func ValidateTransactionWithState(tx *types.Transaction, signer types.Signer, op
 	if prev := opts.ExistingCost(from, tx.Nonce()); prev != nil {
 		bump := new(big.Int).Sub(cost, prev)
 		need := new(big.Int).Add(spent, bump)
-		if balance.Cmp(need) < 0 && sgtBalance.Cmp(need) < 0 {
-			return fmt.Errorf("%w: balance %v, sgt balance:%v, queued cost %v, tx bumped %v, overshot %v", core.ErrInsufficientFunds, balance, sgtBalance, spent, bump, new(big.Int).Sub(need, balance))
+		if balance.Cmp(need) < 0 {
+			return fmt.Errorf("%w: balance %v, queued cost %v, tx bumped %v, overshot %v", core.ErrInsufficientFunds, balance, spent, bump, new(big.Int).Sub(need, balance))
 		}
 	} else {
 		need := new(big.Int).Add(spent, cost)
-		if balance.Cmp(need) < 0 && sgtBalance.Cmp(need) < 0 {
-			return fmt.Errorf("%w: balance %v, sgt balance:%v, queued cost %v, tx cost %v, overshot %v", core.ErrInsufficientFunds, balance, sgtBalance, spent, cost, new(big.Int).Sub(need, balance))
+		if balance.Cmp(need) < 0 {
+			return fmt.Errorf("%w: balance %v, queued cost %v, tx cost %v, overshot %v", core.ErrInsufficientFunds, balance, spent, cost, new(big.Int).Sub(need, balance))
 		}
 		// Transaction takes a new nonce value out of the pool. Ensure it doesn't
 		// overflow the number of permitted transactions from a single account

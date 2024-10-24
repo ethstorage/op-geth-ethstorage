@@ -279,13 +279,21 @@ func (st *StateTransition) GetSoulBalance(account common.Address) *uint256.Int {
 	return balance
 }
 
-func GetEffectiveGasBalance(state vm.StateDB, chainconfig *params.ChainConfig, account common.Address) *uint256.Int {
-	bal, sgtBal := GetGasBalances(state, chainconfig, account)
+// Get the effective balance to pay gas
+func GetEffectiveGasBalance(state vm.StateDB, chainconfig *params.ChainConfig, account common.Address, value *big.Int) (*big.Int, error) {
+	bal, sgtBal := GetGasBalancesInBig(state, chainconfig, account)
+	if value == nil {
+		value = big.NewInt(0)
+	}
+	if bal.Cmp(value) < 0 {
+		return nil, ErrInsufficientFundsForTransfer
+	}
+	bal.Sub(bal, value)
 	if bal.Cmp(sgtBal) < 0 {
-		return sgtBal
+		return sgtBal, nil
 	}
 
-	return bal
+	return bal, nil
 }
 
 func GetGasBalances(state vm.StateDB, chainconfig *params.ChainConfig, account common.Address) (*uint256.Int, *uint256.Int) {
