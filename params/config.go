@@ -523,6 +523,13 @@ func (c *ChainConfig) Description() string {
 	if c.InteropTime != nil {
 		banner += fmt.Sprintf(" - Interop:                     @%-10v\n", *c.InteropTime)
 	}
+	if c.L2BlobTime != nil {
+		banner += fmt.Sprintf(" - L2BLob:                     @%-10v\n", *c.L2BlobTime)
+	}
+	banner += "\n"
+	if c.Optimism != nil {
+		banner += fmt.Sprintf("SGT: %t, Back by native %t", c.Optimism.UseSoulGasToken, c.Optimism.IsSoulBackedByNative)
+	}
 	return banner
 }
 
