@@ -223,13 +223,13 @@ func ApplyMessage(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionResult, err
 //  5. Run Script section
 //  6. Derive new state root
 type StateTransition struct {
-	gp           *GasPool
-	msg          *Message
-	gasRemaining uint64
-	initialGas   uint64
-	state        vm.StateDB
-	evm          *vm.EVM
-	gasFromSoul  bool
+	gp             *GasPool
+	msg            *Message
+	gasRemaining   uint64
+	initialGas     uint64
+	state          vm.StateDB
+	evm            *vm.EVM
+	usedSGTBalance *uint256.Int
 }
 
 // NewStateTransition initialises and returns a new state transition object.
@@ -314,29 +314,35 @@ func GetGasBalancesInBig(state vm.StateDB, chainconfig *params.ChainConfig, acco
 	return bal.ToBig(), sgtBal.ToBig()
 }
 
-func (st *StateTransition) SubSoulBalance(account common.Address, amount *big.Int, reason tracing.BalanceChangeReason) (err error) {
-	current := st.GetSoulBalance(account).ToBig()
+// called by buyGas
+func (st *StateTransition) subSoulBalance(account common.Address, amount *uint256.Int, reason tracing.BalanceChangeReason) (err error) {
+	current := st.GetSoulBalance(account)
 	if current.Cmp(amount) < 0 {
 		return fmt.Errorf("soul balance not enough, current:%v, expect:%v", current, amount)
 	}
 
-	value := uint256.MustFromBig(current.Sub(current, amount)).Bytes32()
+	value := current.Sub(current, amount).Bytes32()
 	st.state.SetState(types.SoulGasTokenAddr, TargetSGTBalanceSlot(account), value)
 
 	if st.evm.ChainConfig().IsOptimism() && st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
-		st.state.SubBalance(types.SoulGasTokenAddr, uint256.MustFromBig(amount), reason)
+		st.state.SubBalance(types.SoulGasTokenAddr, amount, reason)
 	}
+
+	// subSoulBalance is only called by buyGas once
+	st.usedSGTBalance = amount
 	return
 }
 
-func (st *StateTransition) AddSoulBalance(account common.Address, amount *big.Int, reason tracing.BalanceChangeReason) {
-	current := st.GetSoulBalance(account).ToBig()
-	value := uint256.MustFromBig(current.Add(current, amount)).Bytes32()
+// called by refundGas
+func (st *StateTransition) addSoulBalance(account common.Address, amount *uint256.Int, reason tracing.BalanceChangeReason) {
+	current := st.GetSoulBalance(account)
+	value := current.Add(current, amount).Bytes32()
 	st.state.SetState(types.SoulGasTokenAddr, TargetSGTBalanceSlot(account), value)
 
 	if st.evm.ChainConfig().IsOptimism() && st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
-		st.state.AddBalance(types.SoulGasTokenAddr, uint256.MustFromBig(amount), reason)
+		st.state.AddBalance(types.SoulGasTokenAddr, amount, reason)
 	}
+	st.usedSGTBalance.Sub(st.usedSGTBalance, amount)
 }
 
 func (st *StateTransition) buyGas() error {
@@ -377,22 +383,23 @@ func (st *StateTransition) buyGas() error {
 		return fmt.Errorf("%w: address %v required balance exceeds 256 bits", ErrInsufficientFunds, st.msg.From.Hex())
 	}
 
-	st.gasFromSoul = false
-
+	nativeBalance := st.state.GetBalance(st.msg.From)
+	var soulBalance *uint256.Int
 	if st.evm.ChainConfig().IsOptimism() && st.evm.ChainConfig().Optimism.UseSoulGasToken {
-		have := st.GetSoulBalance(st.msg.From)
-		if have, want := have.ToBig(), new(big.Int).Sub(balanceCheck, st.msg.Value); have.Cmp(want) >= 0 {
-			if have, want := st.state.GetBalance(st.msg.From).ToBig(), st.msg.Value; have.Cmp(want) < 0 {
-				return fmt.Errorf("%w: address %v have %v want %v", ErrInsufficientFunds, st.msg.From.Hex(), have, want)
-			}
-			st.gasFromSoul = true
+		if have, want := nativeBalance.ToBig(), st.msg.Value; have.Cmp(want) < 0 {
+			return fmt.Errorf("%w: address %v have native balance %v want %v", ErrInsufficientFunds, st.msg.From.Hex(), have, want)
 		}
-	}
-	if !st.gasFromSoul {
+
+		soulBalance = st.GetSoulBalance(st.msg.From)
+		if have, want := new(uint256.Int).Add(nativeBalance, soulBalance), balanceCheckU256; have.Cmp(want) < 0 {
+			return fmt.Errorf("%w: address %v have total balance %v want %v", ErrInsufficientFunds, st.msg.From.Hex(), have, want)
+		}
+	} else {
 		if have, want := st.state.GetBalance(st.msg.From), balanceCheckU256; have.Cmp(want) < 0 {
 			return fmt.Errorf("%w: address %v have %v want %v", ErrInsufficientFunds, st.msg.From.Hex(), have, want)
 		}
 	}
+
 	if err := st.gp.SubGas(st.msg.GasLimit); err != nil {
 		return err
 	}
@@ -404,12 +411,21 @@ func (st *StateTransition) buyGas() error {
 
 	st.initialGas = st.msg.GasLimit
 
-	if st.gasFromSoul {
-		return st.SubSoulBalance(st.msg.From, mgval, tracing.BalanceDecreaseGasBuy)
-	} else {
-		mgvalU256, _ := uint256.FromBig(mgval)
+	mgvalU256, _ := uint256.FromBig(mgval)
+	if soulBalance == nil {
 		st.state.SubBalance(st.msg.From, mgvalU256, tracing.BalanceDecreaseGasBuy)
+	} else {
+		if mgvalU256.Cmp(soulBalance) <= 0 {
+			return st.subSoulBalance(st.msg.From, mgvalU256, tracing.BalanceDecreaseGasBuy)
+		} else {
+			err := st.subSoulBalance(st.msg.From, soulBalance, tracing.BalanceDecreaseGasBuy)
+			if err != nil {
+				return err
+			}
+			st.state.SubBalance(st.msg.From, new(uint256.Int).Sub(mgvalU256, soulBalance), tracing.BalanceDecreaseGasBuy)
+		}
 	}
+
 	return nil
 }
 
@@ -693,14 +709,22 @@ func (st *StateTransition) innerTransitionDb() (*ExecutionResult, error) {
 
 		// we burn the token if gas is from SoulGasToken which is not backed by native;
 		// otherwise we add to the native balance
-		if st.gasFromSoul && st.evm.ChainConfig().IsOptimism() && !st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
-		} else {
-			st.state.AddBalance(st.evm.Context.Coinbase, fee, tracing.BalanceIncreaseRewardTransactionFee)
 
-			// add the coinbase to the witness iff the fee is greater than 0
-			if rules.IsEIP4762 && fee.Sign() != 0 {
-				st.evm.AccessEvents.AddAccount(st.evm.Context.Coinbase, true)
+		if st.usedSGTBalance != nil && st.evm.ChainConfig().IsOptimism() && !st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
+			if fee.Cmp(st.usedSGTBalance) >= 0 {
+				fee.Sub(fee, st.usedSGTBalance)
+				st.usedSGTBalance.Clear()
+			} else {
+				fee.Clear()
+				st.usedSGTBalance.Sub(st.usedSGTBalance, fee)
 			}
+		}
+
+		st.state.AddBalance(st.evm.Context.Coinbase, fee, tracing.BalanceIncreaseRewardTransactionFee)
+
+		// add the coinbase to the witness iff the fee is greater than 0
+		if rules.IsEIP4762 && fee.Sign() != 0 {
+			st.evm.AccessEvents.AddAccount(st.evm.Context.Coinbase, true)
 		}
 	}
 
@@ -714,10 +738,16 @@ func (st *StateTransition) innerTransitionDb() (*ExecutionResult, error) {
 		}
 		// we burn the token if gas is from SoulGasToken which is not backed by native;
 		// otherwise we add to the native balance
-		if st.gasFromSoul && st.evm.ChainConfig().IsOptimism() && !st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
-		} else {
-			st.state.AddBalance(params.OptimismBaseFeeRecipient, amtU256, tracing.BalanceIncreaseRewardTransactionFee)
+		if st.usedSGTBalance != nil && st.evm.ChainConfig().IsOptimism() && !st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
+			if amtU256.Cmp(st.usedSGTBalance) >= 0 {
+				amtU256.Sub(amtU256, st.usedSGTBalance)
+				st.usedSGTBalance.Clear()
+			} else {
+				amtU256.Clear()
+				st.usedSGTBalance.Sub(st.usedSGTBalance, amtU256)
+			}
 		}
+		st.state.AddBalance(params.OptimismBaseFeeRecipient, amtU256, tracing.BalanceIncreaseRewardTransactionFee)
 		if l1Cost := st.evm.Context.L1CostFunc(st.msg.RollupCostData, st.evm.Context.Time); l1Cost != nil {
 			amtU256, overflow = uint256.FromBig(l1Cost)
 			if overflow {
@@ -725,10 +755,16 @@ func (st *StateTransition) innerTransitionDb() (*ExecutionResult, error) {
 			}
 			// we burn the token if gas is from SoulGasToken which is not backed by native;
 			// otherwise we add to the native balance
-			if st.gasFromSoul && st.evm.ChainConfig().IsOptimism() && !st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
-			} else {
-				st.state.AddBalance(params.OptimismL1FeeRecipient, amtU256, tracing.BalanceIncreaseRewardTransactionFee)
+			if st.usedSGTBalance != nil && st.evm.ChainConfig().IsOptimism() && !st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
+				if amtU256.Cmp(st.usedSGTBalance) >= 0 {
+					amtU256.Sub(amtU256, st.usedSGTBalance)
+					st.usedSGTBalance.Clear()
+				} else {
+					amtU256.Clear()
+					st.usedSGTBalance.Sub(st.usedSGTBalance, amtU256)
+				}
 			}
+			st.state.AddBalance(params.OptimismL1FeeRecipient, amtU256, tracing.BalanceIncreaseRewardTransactionFee)
 		}
 	}
 
@@ -754,13 +790,17 @@ func (st *StateTransition) refundGas(refundQuotient uint64) uint64 {
 	st.gasRemaining += refund
 
 	// Return ETH for remaining gas, exchanged at the original rate.
-	if st.gasFromSoul {
-		remaining := new(big.Int).Mul(new(big.Int).SetUint64(st.gasRemaining), st.msg.GasPrice)
-		st.AddSoulBalance(st.msg.From, remaining, tracing.BalanceIncreaseGasReturn)
-	} else {
-		remaining := uint256.NewInt(st.gasRemaining)
-		remaining.Mul(remaining, uint256.MustFromBig(st.msg.GasPrice))
+	remaining := uint256.NewInt(st.gasRemaining)
+	remaining.Mul(remaining, uint256.MustFromBig(st.msg.GasPrice))
+	if st.usedSGTBalance == nil {
 		st.state.AddBalance(st.msg.From, remaining, tracing.BalanceIncreaseGasReturn)
+	} else {
+		if remaining.Cmp(st.usedSGTBalance) <= 0 {
+			st.addSoulBalance(st.msg.From, remaining, tracing.BalanceIncreaseGasReturn)
+		} else {
+			st.addSoulBalance(st.msg.From, st.usedSGTBalance, tracing.BalanceIncreaseGasReturn)
+			st.state.AddBalance(st.msg.From, remaining.Sub(remaining, st.usedSGTBalance), tracing.BalanceIncreaseGasReturn)
+		}
 	}
 
 	if st.evm.Config.Tracer != nil && st.evm.Config.Tracer.OnGasChange != nil && st.gasRemaining > 0 {
