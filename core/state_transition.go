@@ -297,7 +297,7 @@ func GetEffectiveGasBalance(state vm.StateDB, chainconfig *params.ChainConfig, a
 }
 
 func GetGasBalances(state vm.StateDB, chainconfig *params.ChainConfig, account common.Address) (*uint256.Int, *uint256.Int) {
-	balance := state.GetBalance(account)
+	balance := state.GetBalance(account).Clone()
 	if chainconfig != nil && chainconfig.IsOptimism() && chainconfig.Optimism.UseSoulGasToken {
 		sgtBalanceSlot := TargetSGTBalanceSlot(account)
 		sgtBalanceValue := state.GetState(types.SoulGasTokenAddr, sgtBalanceSlot)
