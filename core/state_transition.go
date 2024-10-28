@@ -223,13 +223,17 @@ func ApplyMessage(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionResult, err
 //  5. Run Script section
 //  6. Derive new state root
 type StateTransition struct {
-	gp             *GasPool
-	msg            *Message
-	gasRemaining   uint64
-	initialGas     uint64
-	state          vm.StateDB
-	evm            *vm.EVM
-	usedSGTBalance *uint256.Int
+	gp           *GasPool
+	msg          *Message
+	gasRemaining uint64
+	initialGas   uint64
+	state        vm.StateDB
+	evm          *vm.EVM
+	// nil means SGT is not used at all
+	initialUsedSGTBalance *uint256.Int
+	// should not be used if initialUsedSGTBalance is nil;
+	// only set when: 1. initialUsedSGTBalance is non-nil 2. used native balance is gt 0
+	usedNativeBalance *uint256.Int
 }
 
 // NewStateTransition initialises and returns a new state transition object.
@@ -240,6 +244,32 @@ func NewStateTransition(evm *vm.EVM, msg *Message, gp *GasPool) *StateTransition
 		msg:   msg,
 		state: evm.StateDB,
 	}
+}
+
+// distributeGas distributes the gas according to the priority: first native, then SGT
+// note: the returned values are all non-nil.
+func (st *StateTransition) distributeGas(amount *uint256.Int) (native, sgt *uint256.Int) {
+	if st.initialUsedSGTBalance == nil {
+		panic("should not happen when initialUsedSGTBalance is nil")
+	}
+	if st.usedNativeBalance == nil {
+		// native is not used at all, distribute all to SGT
+		sgt = amount.Clone()
+		native = new(uint256.Int)
+		return
+	}
+	if amount.Cmp(st.usedNativeBalance) >= 0 {
+		// partial native, remaining is SGT
+		native = st.usedNativeBalance.Clone()
+		sgt = new(uint256.Int).Sub(amount, native)
+		st.usedNativeBalance.Clear()
+	} else {
+		// all native
+		native = amount.Clone()
+		st.usedNativeBalance.Sub(st.usedNativeBalance, amount)
+		sgt = new(uint256.Int)
+	}
+	return
 }
 
 // to returns the recipient of the message.
@@ -329,7 +359,7 @@ func (st *StateTransition) subSoulBalance(account common.Address, amount *uint25
 	}
 
 	// subSoulBalance is only called by buyGas once
-	st.usedSGTBalance = amount
+	st.initialUsedSGTBalance = amount
 	return
 }
 
@@ -342,7 +372,6 @@ func (st *StateTransition) addSoulBalance(account common.Address, amount *uint25
 	if st.evm.ChainConfig().IsOptimism() && st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
 		st.state.AddBalance(types.SoulGasTokenAddr, amount, reason)
 	}
-	st.usedSGTBalance.Sub(st.usedSGTBalance, amount)
 }
 
 func (st *StateTransition) buyGas() error {
@@ -422,7 +451,13 @@ func (st *StateTransition) buyGas() error {
 			if err != nil {
 				return err
 			}
-			st.state.SubBalance(st.msg.From, new(uint256.Int).Sub(mgvalU256, soulBalance), tracing.BalanceDecreaseGasBuy)
+			// when both SGT and native balance are used, we record both amounts for refund.
+			// the priority for refund is: first native, then SGT
+			usedNativeBalance := new(uint256.Int).Sub(mgvalU256, soulBalance)
+			if usedNativeBalance.Sign() > 0 {
+				st.state.SubBalance(st.msg.From, usedNativeBalance, tracing.BalanceDecreaseGasBuy)
+				st.usedNativeBalance = usedNativeBalance
+			}
 		}
 	}
 
@@ -709,15 +744,8 @@ func (st *StateTransition) innerTransitionDb() (*ExecutionResult, error) {
 
 		// we burn the token if gas is from SoulGasToken which is not backed by native;
 		// otherwise we add to the native balance
-
-		if st.usedSGTBalance != nil && st.evm.ChainConfig().IsOptimism() && !st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
-			if fee.Cmp(st.usedSGTBalance) >= 0 {
-				fee.Sub(fee, st.usedSGTBalance)
-				st.usedSGTBalance.Clear()
-			} else {
-				fee.Clear()
-				st.usedSGTBalance.Sub(st.usedSGTBalance, fee)
-			}
+		if st.initialUsedSGTBalance != nil && st.evm.ChainConfig().IsOptimism() && !st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
+			fee, _ = st.distributeGas(fee)
 		}
 
 		st.state.AddBalance(st.evm.Context.Coinbase, fee, tracing.BalanceIncreaseRewardTransactionFee)
@@ -743,14 +771,8 @@ func (st *StateTransition) innerTransitionDb() (*ExecutionResult, error) {
 		}
 		// we burn the token if gas is from SoulGasToken which is not backed by native;
 		// otherwise we add to the native balance
-		if st.usedSGTBalance != nil && st.evm.ChainConfig().IsOptimism() && !st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
-			if amtU256.Cmp(st.usedSGTBalance) >= 0 {
-				amtU256.Sub(amtU256, st.usedSGTBalance)
-				st.usedSGTBalance.Clear()
-			} else {
-				amtU256.Clear()
-				st.usedSGTBalance.Sub(st.usedSGTBalance, amtU256)
-			}
+		if st.initialUsedSGTBalance != nil && st.evm.ChainConfig().IsOptimism() && !st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
+			amtU256, _ = st.distributeGas(amtU256)
 		}
 		st.state.AddBalance(params.OptimismBaseFeeRecipient, amtU256, tracing.BalanceIncreaseRewardTransactionFee)
 		if l1Cost := st.evm.Context.L1CostFunc(st.msg.RollupCostData, st.evm.Context.Time); l1Cost != nil {
@@ -760,14 +782,8 @@ func (st *StateTransition) innerTransitionDb() (*ExecutionResult, error) {
 			}
 			// we burn the token if gas is from SoulGasToken which is not backed by native;
 			// otherwise we add to the native balance
-			if st.usedSGTBalance != nil && st.evm.ChainConfig().IsOptimism() && !st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
-				if amtU256.Cmp(st.usedSGTBalance) >= 0 {
-					amtU256.Sub(amtU256, st.usedSGTBalance)
-					st.usedSGTBalance.Clear()
-				} else {
-					amtU256.Clear()
-					st.usedSGTBalance.Sub(st.usedSGTBalance, amtU256)
-				}
+			if st.initialUsedSGTBalance != nil && st.evm.ChainConfig().IsOptimism() && !st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
+				amtU256, _ = st.distributeGas(amtU256)
 			}
 			st.state.AddBalance(params.OptimismL1FeeRecipient, amtU256, tracing.BalanceIncreaseRewardTransactionFee)
 		}
@@ -797,14 +813,15 @@ func (st *StateTransition) refundGas(refundQuotient uint64) uint64 {
 	// Return ETH for remaining gas, exchanged at the original rate.
 	remaining := uint256.NewInt(st.gasRemaining)
 	remaining.Mul(remaining, uint256.MustFromBig(st.msg.GasPrice))
-	if st.usedSGTBalance == nil {
+	if st.initialUsedSGTBalance == nil {
 		st.state.AddBalance(st.msg.From, remaining, tracing.BalanceIncreaseGasReturn)
 	} else {
-		if remaining.Cmp(st.usedSGTBalance) <= 0 {
-			st.addSoulBalance(st.msg.From, remaining, tracing.BalanceIncreaseGasReturn)
-		} else {
-			st.addSoulBalance(st.msg.From, st.usedSGTBalance, tracing.BalanceIncreaseGasReturn)
-			st.state.AddBalance(st.msg.From, remaining.Sub(remaining, st.usedSGTBalance), tracing.BalanceIncreaseGasReturn)
+		native, sgt := st.distributeGas(remaining)
+		if native.Sign() > 0 {
+			st.state.AddBalance(st.msg.From, remaining, tracing.BalanceIncreaseGasReturn)
+		}
+		if sgt.Sign() > 0 {
+			st.addSoulBalance(st.msg.From, sgt, tracing.BalanceIncreaseGasReturn)
 		}
 	}
 
