@@ -265,12 +265,20 @@ func (st *StateTransition) checkGasFormula() error {
 	return nil
 }
 
-// distributeGasIfSGT distributes the gas according to the priority:
+func (st *StateTransition) collectableNativeBalance(amount *uint256.Int) *uint256.Int {
+	// we burn the token if gas is from SoulGasToken which is not backed by native
+	if st.usedSGTBalance != nil && st.evm.ChainConfig().IsOptimism() && !st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
+		_, amount = st.distributeGas(amount, st.usedSGTBalance, st.usedNativeBalance)
+	}
+	return amount
+}
+
+// distributeGas distributes the gas according to the priority:
 //
 //	first pool1, then pool2
 //
 // note: the returned values are always non-nil.
-func (st *StateTransition) distributeGasIfSGT(amount, pool1, pool2 *uint256.Int) (quota1, quota2 *uint256.Int) {
+func (st *StateTransition) distributeGas(amount, pool1, pool2 *uint256.Int) (quota1, quota2 *uint256.Int) {
 	if amount == nil {
 		panic("amount should not be nil")
 	}
@@ -790,12 +798,7 @@ func (st *StateTransition) innerTransitionDb() (*ExecutionResult, error) {
 
 		st.tipFee = fee.Clone()
 
-		// we burn the token if gas is from SoulGasToken which is not backed by native;
-		// otherwise we add to the native balance
-		if st.usedSGTBalance != nil && st.evm.ChainConfig().IsOptimism() && !st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
-			_, fee = st.distributeGasIfSGT(fee, st.usedSGTBalance, st.usedNativeBalance)
-		}
-
+		fee = st.collectableNativeBalance(fee)
 		st.state.AddBalance(st.evm.Context.Coinbase, fee, tracing.BalanceIncreaseRewardTransactionFee)
 
 		// add the coinbase to the witness iff the fee is greater than 0
@@ -821,11 +824,7 @@ func (st *StateTransition) innerTransitionDb() (*ExecutionResult, error) {
 			st.baseFee = amtU256.Clone()
 		}
 
-		// we burn the token if gas is from SoulGasToken which is not backed by native;
-		// otherwise we add to the native balance
-		if st.usedSGTBalance != nil && st.evm.ChainConfig().IsOptimism() && !st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
-			_, amtU256 = st.distributeGasIfSGT(amtU256, st.usedSGTBalance, st.usedNativeBalance)
-		}
+		amtU256 = st.collectableNativeBalance(amtU256)
 		st.state.AddBalance(params.OptimismBaseFeeRecipient, amtU256, tracing.BalanceIncreaseRewardTransactionFee)
 		if l1Cost := st.evm.Context.L1CostFunc(st.msg.RollupCostData, st.evm.Context.Time); l1Cost != nil {
 			amtU256, overflow = uint256.FromBig(l1Cost)
@@ -840,11 +839,7 @@ func (st *StateTransition) innerTransitionDb() (*ExecutionResult, error) {
 				}
 			}
 
-			// we burn the token if gas is from SoulGasToken which is not backed by native;
-			// otherwise we add to the native balance
-			if st.usedSGTBalance != nil && st.evm.ChainConfig().IsOptimism() && !st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
-				_, amtU256 = st.distributeGasIfSGT(amtU256, st.usedSGTBalance, st.usedNativeBalance)
-			}
+			amtU256 = st.collectableNativeBalance(amtU256)
 			st.state.AddBalance(params.OptimismL1FeeRecipient, amtU256, tracing.BalanceIncreaseRewardTransactionFee)
 		}
 	}
@@ -877,7 +872,7 @@ func (st *StateTransition) refundGas(refundQuotient uint64) uint64 {
 	if st.usedSGTBalance == nil {
 		st.state.AddBalance(st.msg.From, remaining, tracing.BalanceIncreaseGasReturn)
 	} else {
-		native, sgt := st.distributeGasIfSGT(remaining, st.usedNativeBalance, st.usedSGTBalance)
+		native, sgt := st.distributeGas(remaining, st.usedNativeBalance, st.usedSGTBalance)
 		if native.Sign() > 0 {
 			st.state.AddBalance(st.msg.From, remaining, tracing.BalanceIncreaseGasReturn)
 		}
