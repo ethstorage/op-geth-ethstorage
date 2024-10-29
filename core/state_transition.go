@@ -408,8 +408,6 @@ func (st *StateTransition) subSoulBalance(account common.Address, amount *uint25
 		st.state.SubBalance(types.SoulGasTokenAddr, amount, reason)
 	}
 
-	// subSoulBalance is only called by buyGas once
-	st.usedSGTBalance = amount
 	return
 }
 
@@ -422,7 +420,6 @@ func (st *StateTransition) addSoulBalance(account common.Address, amount *uint25
 	if st.evm.ChainConfig().IsOptimism() && st.evm.ChainConfig().Optimism.IsSoulBackedByNative {
 		st.state.AddBalance(types.SoulGasTokenAddr, amount, reason)
 	}
-	st.usedSGTBalance.Sub(st.usedSGTBalance, amount)
 }
 
 func (st *StateTransition) buyGas() error {
@@ -497,12 +494,17 @@ func (st *StateTransition) buyGas() error {
 		st.state.SubBalance(st.msg.From, mgvalU256, tracing.BalanceDecreaseGasBuy)
 	} else {
 		if mgvalU256.Cmp(soulBalance) <= 0 {
-			return st.subSoulBalance(st.msg.From, mgvalU256, tracing.BalanceDecreaseGasBuy)
+			err := st.subSoulBalance(st.msg.From, mgvalU256, tracing.BalanceDecreaseGasBuy)
+			if err != nil {
+				return err
+			}
+			st.usedSGTBalance = mgvalU256
 		} else {
 			err := st.subSoulBalance(st.msg.From, soulBalance, tracing.BalanceDecreaseGasBuy)
 			if err != nil {
 				return err
 			}
+			st.usedSGTBalance = soulBalance
 			// when both SGT and native balance are used, we record both amounts for refund.
 			// the priority for refund is: first native, then SGT
 			usedNativeBalance := new(uint256.Int).Sub(mgvalU256, soulBalance)
@@ -884,6 +886,7 @@ func (st *StateTransition) refundGas(refundQuotient uint64) uint64 {
 		}
 		if sgt.Sign() > 0 {
 			st.addSoulBalance(st.msg.From, sgt, tracing.BalanceIncreaseGasReturn)
+			st.usedSGTBalance.Sub(st.usedSGTBalance, sgt)
 		}
 	}
 
