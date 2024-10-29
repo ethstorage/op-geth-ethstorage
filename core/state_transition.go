@@ -834,13 +834,19 @@ func (st *StateTransition) innerTransitionDb() (*ExecutionResult, error) {
 
 			if shouldCheckGasFormula {
 				st.l1Fee = amtU256.Clone()
-				if err := st.checkGasFormula(); err != nil {
-					return nil, err
-				}
 			}
 
 			amtU256 = st.collectableNativeBalance(amtU256)
 			st.state.AddBalance(params.OptimismL1FeeRecipient, amtU256, tracing.BalanceIncreaseRewardTransactionFee)
+		}
+
+		if shouldCheckGasFormula {
+			if st.l1Fee == nil {
+				st.l1Fee = new(uint256.Int)
+			}
+			if err := st.checkGasFormula(); err != nil {
+				return nil, err
+			}
 		}
 	}
 
