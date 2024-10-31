@@ -275,7 +275,11 @@ func (st *StateTransition) collectableNativeBalance(amount *uint256.Int) *uint25
 
 // distributeGas distributes the gas according to the priority:
 //
-//	first pool1, then pool2
+//		first pool1, then pool2.
+//
+//	 In more detail:
+//		split amount among two pools, first pool1, then pool2, where poolx means max amount for pool x.
+//		quotax is the amount distributed to pool x.
 //
 // note: the returned values are always non-nil.
 func (st *StateTransition) distributeGas(amount, pool1, pool2 *uint256.Int) (quota1, quota2 *uint256.Int) {
