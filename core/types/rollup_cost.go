@@ -380,6 +380,7 @@ func NewL1CostFuncFjord(l1BaseFee, l1BlobBaseFee, baseFeeScalar, blobFeeScalar *
 
 		l1CostScaled := new(big.Int).Mul(estimatedSize, l1FeeScaled)
 		l1Cost := new(big.Int).Div(l1CostScaled, fjordDivisor)
+		l1Cost = new(big.Int).Add(l1Cost, new(big.Int).Mul(big.NewInt(int64(costData.Blobs)), big.NewInt(params.BlobDAFee)))
 
 		calldataGasUsed = new(big.Int).Mul(estimatedSize, new(big.Int).SetUint64(params.TxDataNonZeroGasEIP2028))
 		calldataGasUsed.Div(calldataGasUsed, big.NewInt(1e6))
