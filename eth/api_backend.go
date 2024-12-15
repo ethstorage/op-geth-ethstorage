@@ -289,7 +289,8 @@ func (b *EthAPIBackend) SubscribeLogsEvent(ch chan<- []*types.Log) event.Subscri
 }
 
 func (b *EthAPIBackend) SendTx(ctx context.Context, signedTx *types.Transaction) error {
-	if b.ChainConfig().IsOptimism() && signedTx.Type() == types.BlobTxType {
+	header := b.eth.blockchain.CurrentHeader()
+	if signedTx.Type() == types.BlobTxType && b.ChainConfig().IsOptimism() && !b.ChainConfig().IsL2Blob(header.Number, header.Time) {
 		return types.ErrTxTypeNotSupported
 	}
 	if b.eth.seqRPCService != nil {

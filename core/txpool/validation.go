@@ -81,7 +81,7 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 	if tx.Type() == types.DepositTxType {
 		return core.ErrTxTypeNotSupported
 	}
-	if opts.Config.IsOptimism() && tx.Type() == types.BlobTxType {
+	if tx.Type() == types.BlobTxType && opts.Config.IsOptimism() && !opts.Config.IsL2Blob(head.Number, head.Time) {
 		return core.ErrTxTypeNotSupported
 	}
 	// Ensure transactions not implemented by the calling pool are rejected
@@ -202,7 +202,8 @@ func validateBlobSidecar(hashes []common.Hash, sidecar *types.BlobTxSidecar) err
 // ValidationOptionsWithState define certain differences between stateful transaction
 // validation across the different pools without having to duplicate those checks.
 type ValidationOptionsWithState struct {
-	State *state.StateDB // State database to check nonces and balances against
+	State       *state.StateDB // State database to check nonces and balances against
+	Chainconfig *params.ChainConfig
 
 	// FirstNonceGap is an optional callback to retrieve the first nonce gap in
 	// the list of pooled transactions of a specific account. If this method is
@@ -251,10 +252,12 @@ func ValidateTransactionWithState(tx *types.Transaction, signer types.Signer, op
 		}
 	}
 	// Ensure the transactor has enough funds to cover the transaction costs
-	var (
-		balance = opts.State.GetBalance(from).ToBig()
-		cost    = tx.Cost()
-	)
+	balance, err := core.GetEffectiveGasBalance(opts.State, opts.Chainconfig, from, tx.Value())
+	if err != nil {
+		return fmt.Errorf("%w: balance %v, tx value %v", err, balance, tx.Value())
+	}
+	cost := tx.GasCost()
+
 	if opts.L1CostFn != nil {
 		if l1Cost := opts.L1CostFn(tx.RollupCostData()); l1Cost != nil { // add rollup cost
 			cost = cost.Add(cost, l1Cost)

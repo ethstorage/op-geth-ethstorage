@@ -382,6 +382,15 @@ func (tx *Transaction) Cost() *big.Int {
 	return total
 }
 
+// Cost returns (gas * gasPrice) + (blobGas * blobGasPrice).
+func (tx *Transaction) GasCost() *big.Int {
+	total := new(big.Int).Mul(tx.GasPrice(), new(big.Int).SetUint64(tx.Gas()))
+	if tx.Type() == BlobTxType {
+		total.Add(total, new(big.Int).Mul(tx.BlobGasFeeCap(), new(big.Int).SetUint64(tx.BlobGas())))
+	}
+	return total
+}
+
 // RollupCostData caches the information needed to efficiently compute the data availability fee
 func (tx *Transaction) RollupCostData() RollupCostData {
 	if tx.Type() == DepositTxType {
@@ -390,11 +399,14 @@ func (tx *Transaction) RollupCostData() RollupCostData {
 	if v := tx.rollupCostData.Load(); v != nil {
 		return v.(RollupCostData)
 	}
-	data, err := tx.MarshalBinary()
+	// When called from commitBlobTransaction, tx contains blob.
+	// When called from state processor, tx doesn't contain blob.
+	// In order to make the result consistent, we should use the version without blob.
+	data, err := tx.WithoutBlobTxSidecar().MarshalBinary()
 	if err != nil { // Silent error, invalid txs will not be marshalled/unmarshalled for batch submission anyway.
 		log.Error("failed to encode tx for L1 cost computation", "err", err)
 	}
-	out := NewRollupCostData(data)
+	out := NewRollupCostData(data, len(tx.BlobHashes()))
 	tx.rollupCostData.Store(out)
 	return out
 }

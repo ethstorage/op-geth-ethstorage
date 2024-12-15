@@ -40,7 +40,7 @@ type sigCache struct {
 func MakeSigner(config *params.ChainConfig, blockNumber *big.Int, blockTime uint64) Signer {
 	var signer Signer
 	switch {
-	case config.IsCancun(blockNumber, blockTime) && !config.IsOptimism():
+	case config.IsCancun(blockNumber, blockTime) && (!config.IsOptimism() || config.IsL2Blob(blockNumber, blockTime)):
 		signer = NewCancunSigner(config.ChainID)
 	case config.IsLondon(blockNumber):
 		signer = NewLondonSigner(config.ChainID)
@@ -67,7 +67,7 @@ func LatestSigner(config *params.ChainConfig) Signer {
 	var signer Signer
 	if config.ChainID != nil {
 		switch {
-		case config.CancunTime != nil && !config.IsOptimism():
+		case config.CancunTime != nil && (!config.IsOptimism() || config.L2BlobTime != nil):
 			signer = NewCancunSigner(config.ChainID)
 		case config.LondonBlock != nil:
 			signer = NewLondonSigner(config.ChainID)

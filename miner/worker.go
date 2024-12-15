@@ -76,11 +76,17 @@ type environment struct {
 	receipts []*types.Receipt
 	sidecars []*types.BlobTxSidecar
 	blobs    int
+	witness  *stateless.Witness
 
-	witness *stateless.Witness
-
+	// this is used as a flag whether it's *effectively* sequencing or deriving (es comment)
 	noTxs  bool            // true if we are reproducing a block, and do not have to check interop txs
 	rpcCtx context.Context // context to control block-building RPC work. No RPC allowed if nil.
+}
+
+// isEffectivelySequencing is true when PayloadAttributes.NoTxPool is false,
+// which only happens when it's sequencing.
+func (env *environment) isEffectivelySequencing() bool {
+	return !env.noTxs
 }
 
 const (
@@ -311,6 +317,7 @@ func (miner *Miner) prepareWork(genParams *generateParams, witness bool) (*envir
 		vmenv := vm.NewEVM(context, vm.TxContext{}, env.state, miner.chainConfig, vm.Config{})
 		core.ProcessParentBlockHash(header.ParentHash, vmenv, env.state)
 	}
+	env.noTxs = genParams.noTxs // invariant: genParams.noTxs has the same boolean value as PayloadAttributes.NoTxPool
 	return env, nil
 }
 
@@ -382,7 +389,7 @@ func (miner *Miner) commitTransaction(env *environment, tx *types.Transaction) e
 
 func (miner *Miner) commitBlobTransaction(env *environment, tx *types.Transaction) error {
 	sc := tx.BlobTxSidecar()
-	if sc == nil {
+	if sc == nil && env.isEffectivelySequencing() /* we want to allow blob tx without blobs when it's deriving */ {
 		panic("blob transaction without blobs in miner")
 	}
 	// Checking against blob gas limit: It's kind of ugly to perform this check here, but there
@@ -398,8 +405,10 @@ func (miner *Miner) commitBlobTransaction(env *environment, tx *types.Transactio
 	}
 	env.txs = append(env.txs, tx.WithoutBlobTxSidecar())
 	env.receipts = append(env.receipts, receipt)
-	env.sidecars = append(env.sidecars, sc)
-	env.blobs += len(sc.Blobs)
+	if sc != nil {
+		env.sidecars = append(env.sidecars, sc)
+	}
+	env.blobs += len(tx.BlobHashes())
 	*env.header.BlobGasUsed += receipt.BlobGasUsed
 	env.tcount++
 	return nil
