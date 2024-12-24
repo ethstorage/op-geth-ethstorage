@@ -259,6 +259,10 @@ func makeFullNode(ctx *cli.Context) *node.Node {
 		utils.RegisterFullSyncTester(stack, eth, common.BytesToHash(hex))
 	}
 
+	if ctx.IsSet(utils.EsURLFlag.Name) {
+		params.EsNodeURL = ctx.String(utils.EsURLFlag.Name)
+	}
+
 	if ctx.IsSet(utils.DeveloperFlag.Name) {
 		// Start dev mode.
 		simBeacon, err := catalyst.NewSimulatedBeacon(ctx.Uint64(utils.DeveloperPeriodFlag.Name), eth)

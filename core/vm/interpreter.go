@@ -44,6 +44,7 @@ type Config struct {
 	PrecompileOverrides PrecompileOverrides             // Precompiles can be swapped / changed / wrapped as needed
 	NoMaxCodeSize       bool                            // Ignore Max code size and max init code size limits
 	CallerOverride      func(v ContractRef) ContractRef // Swap the caller as needed, for VM prank functionality.
+	IsEthStorage        bool                            // Enables EthStorage related precompiles
 }
 
 // ScopeContext contains the things that are per-call, such as stack and memory,

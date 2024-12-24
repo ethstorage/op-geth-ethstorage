@@ -46,6 +46,9 @@ func (evm *EVM) precompile(addr common.Address) (PrecompiledContract, bool) {
 		override := evm.Config.PrecompileOverrides(evm.chainRules, p, addr)
 		return override, override != nil
 	}
+	if evm.Config.IsEthStorage && !ok {
+		p, ok = PrecompiledContractsES[addr]
+	}
 	return p, ok
 }
 
