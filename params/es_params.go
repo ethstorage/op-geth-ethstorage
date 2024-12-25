@@ -6,5 +6,5 @@ const (
 )
 
 var (
-	EsNodeURL = "http://localhost:9545"
+	EsNodeURL = "http://localhost:9540"
 )
