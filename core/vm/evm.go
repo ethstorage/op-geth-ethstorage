@@ -18,6 +18,7 @@ package vm
 
 import (
 	"errors"
+	"log"
 	"math/big"
 	"sync/atomic"
 
@@ -41,11 +42,13 @@ type (
 )
 
 func (evm *EVM) precompile(addr common.Address) (PrecompiledContract, bool) {
+	log.Println("-----precompile--1---")
 	p, ok := evm.precompiles[addr]
 	if evm.Config.PrecompileOverrides != nil {
 		override := evm.Config.PrecompileOverrides(evm.chainRules, p, addr)
 		return override, override != nil
 	}
+	log.Println("-----precompile--2---", evm.Config.IsEthStorage, !ok)
 	if evm.Config.IsEthStorage && !ok {
 		p, ok = PrecompiledContractsES[addr]
 	}

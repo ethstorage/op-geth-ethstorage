@@ -1272,7 +1272,13 @@ func doCall(ctx context.Context, b Backend, args TransactionArgs, state *state.S
 	} else {
 		gp.AddGas(globalGasCap)
 	}
-	return applyMessage(ctx, b, args, state, header, timeout, gp, &blockCtx, &vm.Config{NoBaseFee: true}, precompiles, true)
+
+	var isEthStorage = false
+	if ctx.Value(esKey{}) == true {
+		isEthStorage = true
+	}
+	log.Info("-----isEthStorage-----", "isEthStorage", isEthStorage)
+	return applyMessage(ctx, b, args, state, header, timeout, gp, &blockCtx, &vm.Config{NoBaseFee: true, IsEthStorage: isEthStorage}, precompiles, true)
 }
 
 func applyMessage(ctx context.Context, b Backend, args TransactionArgs, state *state.StateDB, header *types.Header, timeout time.Duration, gp *core.GasPool, blockContext *vm.BlockContext, vmConfig *vm.Config, precompiles vm.PrecompiledContracts, skipChecks bool) (*core.ExecutionResult, error) {
@@ -1289,12 +1295,7 @@ func applyMessage(ctx context.Context, b Backend, args TransactionArgs, state *s
 	if msg.BlobGasFeeCap != nil && msg.BlobGasFeeCap.BitLen() == 0 {
 		blockContext.BlobBaseFee = new(big.Int)
 	}
-	var isEthStorage = false
-	if ctx.Value(esKey{}) == true {
-		isEthStorage = true
-	}
-	evm := b.GetEVM(ctx, msg, state, header, &vm.Config{NoBaseFee: true, IsEthStorage: isEthStorage}, blockContext)
-	// TODO evm := b.GetEVM(ctx, msg, state, header, vmConfig, blockContext)
+	evm := b.GetEVM(ctx, msg, state, header, vmConfig, blockContext)
 	if precompiles != nil {
 		evm.SetPrecompiles(precompiles)
 	}
